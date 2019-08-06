@@ -1,19 +1,136 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Reflection.Metadata;
+using System.Text;
+using System.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+
+public static class Extensions
+{
+    public static string ListToString<T>(this IEnumerable<T> list, string separator = ", ")
+    {
+        return string.Join(separator, list);
+    }
+    
+    // https://stackoverflow.com/questions/27105909/get-fully-qualified-metadata-name-in-roslyn
+    public static string GetFullMetadataName(this ISymbol s)
+    {
+        if (s == null || IsRootNamespace(s))
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder(s.MetadataName);
+        var last = s;
+
+        s = s.ContainingSymbol;
+
+        while (!IsRootNamespace(s))
+        {
+            if (s is ITypeSymbol && last is ITypeSymbol)
+            {
+                sb.Insert(0, '+');
+            }
+            else
+            {
+                sb.Insert(0, '.');
+            }
+
+            sb.Insert(0, s.OriginalDefinition.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat));
+            //sb.Insert(0, s.MetadataName);
+            s = s.ContainingSymbol;
+        }
+
+        return sb.ToString();
+    }
+
+    private static bool IsRootNamespace(ISymbol symbol)
+    {
+        INamespaceSymbol s = null;
+        return ((s = symbol as INamespaceSymbol) != null) && s.IsGlobalNamespace;
+    }
+}
+
+class Rewriter : CSharpSyntaxRewriter
+{
+    SemanticModel m_semanticModel;
+    Assembly m_assembly;
+
+    public Rewriter(SemanticModel semanticModel, Assembly asm)
+    {
+        m_semanticModel = semanticModel;
+        m_assembly = asm;
+    }
+
+    object CompileAndRun(string returnType, string source)
+    {
+        var syntaxTree = SyntaxFactory.ParseSyntaxTree($"public static class Runner {{ public static {returnType} Run() {{ return {source}; }} }}");
+        var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary);
+        var compilation = CSharpCompilation.Create("InMemoryAssembly", options: options).
+            AddReferences(Program.MetadataReferences.Concat(new[] { MetadataReference.CreateFromFile(m_assembly.Location) })).
+            AddSyntaxTrees(syntaxTree);
+
+        var stream = new MemoryStream();
+        var emitResult = compilation.Emit(stream);
+
+        stream.Seek(0, SeekOrigin.Begin);
+        var assembly = Assembly.Load(stream.ToArray());
+        var value = assembly.GetType("Runner").GetMethod("Run").Invoke(null, new object[0]);
+        // TODO: unload assembly
+        return value;
+    }
+
+    IMethodSymbol GetMethodSemantics(InvocationExpressionSyntax invocation)
+    {
+        switch (invocation.Expression)
+        {
+            case MemberAccessExpressionSyntax memberAccess:
+                return (IMethodSymbol)m_semanticModel.GetSymbolInfo(memberAccess.Name).Symbol;
+            default:
+                var symbolInfo = m_semanticModel.GetSymbolInfo(invocation.Expression);
+                return symbolInfo.Symbol as IMethodSymbol;
+        }
+    }
+
+    public override SyntaxNode VisitInvocationExpression(InvocationExpressionSyntax node)
+    {
+        var methodSemantics = GetMethodSemantics(node);
+        var returnType = methodSemantics.ReturnType.ToString();
+        var fullInvocation = SyntaxFactory.InvocationExpression(
+            SyntaxFactory.ParseExpression(methodSemantics.GetFullMetadataName()),
+            node.ArgumentList);
+        var value = CompileAndRun(returnType, fullInvocation.ToString());
+        var expression = SyntaxFactory.ParseExpression(value.ToString());
+        return expression;
+    }
+}
 
 class Program
 {
     static void Main(string[] args)
     {
-        var references = new[]
+        var thread = new Thread(Run);
+        thread.Start();
+        thread.Join();
+    }
+
+    public static MetadataReference[] MetadataReferences { get; private set; }
+
+    static async void Run()
+    {
+        var source = await File.ReadAllTextAsync("Test.cs");
+
+        var references = MetadataReferences = new[]
         {
             MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
             MetadataReference.CreateFromFile(Path.Combine(
                 Path.GetDirectoryName(typeof(object).Assembly.Location),
                 "System.Runtime.dll")),
-            MetadataReference.CreateFromFile("C:\\projects\\IL2Workshop\\WorkshopStub\\bin\\Debug\\netcoreapp3.0\\WorkshopStub.dll"),
         };
 
         var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, optimizationLevel: OptimizationLevel.Release);
@@ -23,16 +140,28 @@ class Program
             new[] { syntaxTree },
             references,
             options);
+
+        var result = compilation.Emit("AsmBuild.dll");
+        if (!result.Success)
+        {
+            foreach (var diag in result.Diagnostics)
+                Console.WriteLine(diag);
+            throw new System.Exception("Fail!");
+        }
+
+        var asm = Assembly.LoadFrom("AsmBuild.dll");
+
         var semanticModel = compilation.GetSemanticModel(syntaxTree);
 
-        var substituter = new MethodSubstituter(semanticModel, m_generatedMethodToWorkshopCode);
+        var substituter = new Rewriter(semanticModel, asm);
         var newRoot = substituter.Visit(syntaxTree.GetRoot());
         var newTree = SyntaxFactory.SyntaxTree(newRoot);
-        var generatedClassTree = substituter.GetGeneratedClass();
+        Console.WriteLine(newTree);
+        // var generatedClassTree = substituter.GetGeneratedClass();
 
-        compilation = compilation.RemoveAllSyntaxTrees();
-        compilation = compilation.AddSyntaxTrees(newTree, generatedClassTree);
+        // compilation = compilation.RemoveAllSyntaxTrees();
+        // compilation = compilation.AddSyntaxTrees(newTree, generatedClassTree);
 
-        Console.WriteLine(generatedClassTree.ToString());
+        // Console.WriteLine(generatedClassTree.ToString());
     }
 }
