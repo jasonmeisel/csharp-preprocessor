@@ -106,8 +106,9 @@ class Rewriter : CSharpSyntaxRewriter
             var fullInvocation = SyntaxFactory.InvocationExpression(
                 SyntaxFactory.ParseExpression(methodSemantics.GetFullMetadataName()),
                 node.ArgumentList);
-            var value = CompileAndRun(returnType, fullInvocation.ToString()).ToString();
-            return SyntaxFactory.ParseExpression(value is string ? $"\"{Regex.Escape(value)}\"" : value);
+            var value = CompileAndRun(returnType, fullInvocation.ToString());
+            var valueStr = value.ToString();
+            return SyntaxFactory.ParseExpression(value is string ? $"\"{Regex.Escape(valueStr)}\"" : valueStr);
         }
         return base.VisitInvocationExpression(node);
     }
