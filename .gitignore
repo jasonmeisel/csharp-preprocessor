@@ -4,3 +4,4 @@ tool/bin/
 tool/obj/
 test/bin/
 test/obj/
+AsmBuild.dll
