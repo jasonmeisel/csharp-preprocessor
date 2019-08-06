@@ -9,10 +9,7 @@ public static class Test
         return a + b;
     }
 
-    public static int GetNum()
-    {
-        return Add(3, 5);
-    }
+    public static int Num => Add(3, 5);
 
     [CompileTime]
     public static int RandomInt()
@@ -20,7 +17,7 @@ public static class Test
         return new Random().Next();
     }
 
-    public static readonly int UniqueId = RandomInt();
+    public static int UniqueId => RandomInt();
 
     [CompileTime]
     public static string GetFileText(string path)
@@ -28,5 +25,19 @@ public static class Test
         return File.ReadAllText(path);
     }
 
-    public static readonly string GitIgnoreContents = GetFileText(".gitignore");
+    public static string GitIgnoreContents => GetFileText(".gitignore");
+
+    [CompileTime]
+    static int s_nextNumber = 0;
+
+    [CompileTime]
+    public static int GetNextNumber()
+    {
+        return s_nextNumber++;
+    }
+
+    public static int Num0 => GetNextNumber();
+    public static int Num1 => GetNextNumber();
+    public static int Num2 => GetNextNumber();
+    public static int Num3 => GetNextNumber();
 }

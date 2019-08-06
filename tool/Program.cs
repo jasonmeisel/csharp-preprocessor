@@ -54,6 +54,11 @@ public static class Extensions
     {
         return symbol is INamespaceSymbol s && s.IsGlobalNamespace;
     }
+
+    public static bool HasCompileTimeAttribute(this ISymbol symbol)
+    {
+        return symbol.GetAttributes().Any(attr => attr.AttributeClass.Name == "CompileTimeAttribute");
+    }
 }
 
 class Rewriter : CSharpSyntaxRewriter
@@ -99,12 +104,12 @@ class Rewriter : CSharpSyntaxRewriter
 
     public override SyntaxNode VisitInvocationExpression(InvocationExpressionSyntax node)
     {
-        var methodSemantics = GetMethodSemantics(node);
-        if (HasCompileTimeAttribute(methodSemantics))
+        var symbol = GetMethodSemantics(node);
+        if (symbol.HasCompileTimeAttribute())
         {
-            var returnType = methodSemantics.ReturnType.ToString();
+            var returnType = symbol.ReturnType.ToString();
             var fullInvocation = SyntaxFactory.InvocationExpression(
-                SyntaxFactory.ParseExpression(methodSemantics.GetFullMetadataName()),
+                SyntaxFactory.ParseExpression(symbol.GetFullMetadataName()),
                 node.ArgumentList);
             var value = CompileAndRun(returnType, fullInvocation.ToString());
             var valueStr = value.ToString();
@@ -113,20 +118,26 @@ class Rewriter : CSharpSyntaxRewriter
         return base.VisitInvocationExpression(node);
     }
 
-    private static bool HasCompileTimeAttribute(IMethodSymbol methodSemantics)
+    public override SyntaxNode Visit(SyntaxNode node)
     {
-        return methodSemantics.GetAttributes().Any(attr => attr.AttributeClass.Name == "CompileTimeAttribute");
+        switch (node)
+        {
+            case MemberDeclarationSyntax member when m_semanticModel.GetDeclaredSymbol(member)?.HasCompileTimeAttribute() == true:
+            case FieldDeclarationSyntax field when field.Declaration.Variables.Any(v => m_semanticModel.GetDeclaredSymbol(v)?.HasCompileTimeAttribute() == true):
+                return null;
+        }
+        return base.Visit(node);
     }
 
-    public override SyntaxNode VisitMethodDeclaration(MethodDeclarationSyntax node)
-    {
-        var symbol = m_semanticModel.GetDeclaredSymbol(node);
-        if (HasCompileTimeAttribute(symbol))
-        {
-            return null;
-        }
-        return base.VisitMethodDeclaration(node);
-    }
+    // public override SyntaxNode VisitMethodDeclaration(MethodDeclarationSyntax node)
+    // {
+    //     var symbol = m_semanticModel.GetDeclaredSymbol(node);
+    //     if (symbol.HasCompileTimeAttribute())
+    //     {
+    //         return null;
+    //     }
+    //     return base.VisitMethodDeclaration(node);
+    // }
 }
 
 class Program
