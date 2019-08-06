@@ -1,2 +1,6 @@
-bin/
-obj/
+﻿lib/bin/
+lib/obj/
+tool/bin/
+tool/obj/
+test/bin/
+test/obj/

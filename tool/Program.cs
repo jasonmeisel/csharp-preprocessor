@@ -51,8 +51,7 @@ public static class Extensions
 
     private static bool IsRootNamespace(ISymbol symbol)
     {
-        INamespaceSymbol s = null;
-        return ((s = symbol as INamespaceSymbol) != null) && s.IsGlobalNamespace;
+        return symbol is INamespaceSymbol s && s.IsGlobalNamespace;
     }
 }
 
@@ -100,13 +99,27 @@ class Rewriter : CSharpSyntaxRewriter
     public override SyntaxNode VisitInvocationExpression(InvocationExpressionSyntax node)
     {
         var methodSemantics = GetMethodSemantics(node);
-        var returnType = methodSemantics.ReturnType.ToString();
-        var fullInvocation = SyntaxFactory.InvocationExpression(
-            SyntaxFactory.ParseExpression(methodSemantics.GetFullMetadataName()),
-            node.ArgumentList);
-        var value = CompileAndRun(returnType, fullInvocation.ToString());
-        var expression = SyntaxFactory.ParseExpression(value.ToString());
-        return expression;
+        if (HasCompileTimeAttribute(methodSemantics))
+        {
+            var returnType = methodSemantics.ReturnType.ToString();
+            var fullInvocation = SyntaxFactory.InvocationExpression(
+                SyntaxFactory.ParseExpression(methodSemantics.GetFullMetadataName()),
+                node.ArgumentList);
+            var value = CompileAndRun(returnType, fullInvocation.ToString());
+            return SyntaxFactory.ParseExpression(value.ToString());
+        }
+        return base.VisitInvocationExpression(node);
+    }
+
+    private static bool HasCompileTimeAttribute(IMethodSymbol methodSemantics)
+    {
+        return methodSemantics.GetAttributes().Any(attr => attr.AttributeClass.Name == "CompileTimeAttribute");
+    }
+
+    public override SyntaxNode VisitMethodDeclaration(MethodDeclarationSyntax node)
+    {
+        var symbol = m_semanticModel.GetSymbolInfo(node);
+        return base.VisitMethodDeclaration(node);
     }
 }
 
@@ -123,7 +136,7 @@ class Program
 
     static async void Run()
     {
-        var source = await File.ReadAllTextAsync("Test.cs");
+        var source = await File.ReadAllTextAsync("test/Test.cs");
 
         var references = MetadataReferences = new[]
         {
@@ -131,6 +144,7 @@ class Program
             MetadataReference.CreateFromFile(Path.Combine(
                 Path.GetDirectoryName(typeof(object).Assembly.Location),
                 "System.Runtime.dll")),
+            MetadataReference.CreateFromFile("lib/bin/Debug/netcoreapp3.0/lib.dll"),
         };
 
         var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, optimizationLevel: OptimizationLevel.Release);
