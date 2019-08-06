@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -105,8 +106,8 @@ class Rewriter : CSharpSyntaxRewriter
             var fullInvocation = SyntaxFactory.InvocationExpression(
                 SyntaxFactory.ParseExpression(methodSemantics.GetFullMetadataName()),
                 node.ArgumentList);
-            var value = CompileAndRun(returnType, fullInvocation.ToString());
-            return SyntaxFactory.ParseExpression(value.ToString());
+            var value = CompileAndRun(returnType, fullInvocation.ToString()).ToString();
+            return SyntaxFactory.ParseExpression(value is string ? $"\"{Regex.Escape(value)}\"" : value);
         }
         return base.VisitInvocationExpression(node);
     }
@@ -118,7 +119,11 @@ class Rewriter : CSharpSyntaxRewriter
 
     public override SyntaxNode VisitMethodDeclaration(MethodDeclarationSyntax node)
     {
-        var symbol = m_semanticModel.GetSymbolInfo(node);
+        var symbol = m_semanticModel.GetDeclaredSymbol(node);
+        if (HasCompileTimeAttribute(symbol))
+        {
+            return null;
+        }
         return base.VisitMethodDeclaration(node);
     }
 }
@@ -138,14 +143,13 @@ class Program
     {
         var source = await File.ReadAllTextAsync("test/Test.cs");
 
-        var references = MetadataReferences = new[]
-        {
-            MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
-            MetadataReference.CreateFromFile(Path.Combine(
-                Path.GetDirectoryName(typeof(object).Assembly.Location),
-                "System.Runtime.dll")),
-            MetadataReference.CreateFromFile("lib/bin/Debug/netcoreapp3.0/lib.dll"),
-        };
+        var references = MetadataReferences = AppDomain.CurrentDomain.GetAssemblies().
+            Select(ass => MetadataReference.CreateFromFile(ass.Location)).
+            Concat(new[]
+            {
+                MetadataReference.CreateFromFile("lib/bin/Debug/netcoreapp3.0/lib.dll"),
+            }).
+            ToArray();
 
         var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, optimizationLevel: OptimizationLevel.Release);
         var syntaxTree = SyntaxFactory.ParseSyntaxTree(source);

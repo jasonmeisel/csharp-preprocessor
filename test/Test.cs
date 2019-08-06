@@ -1,3 +1,6 @@
+using System;
+using System.IO;
+
 public static class Test
 {
     [CompileTime]
@@ -10,4 +13,20 @@ public static class Test
     {
         return Add(3, 5);
     }
+
+    [CompileTime]
+    public static int RandomInt()
+    {
+        return new Random().Next();
+    }
+
+    public static readonly int UniqueId = RandomInt();
+
+    [CompileTime]
+    public static string GetFileText(string path)
+    {
+        return File.ReadAllText(path);
+    }
+
+    public static readonly string GitIgnoreContents = GetFileText(".gitignore");
 }
