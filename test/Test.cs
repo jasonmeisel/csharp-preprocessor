@@ -33,12 +33,7 @@ public static class Test
     public static int Num2 => GetNextNumber();
     public static int Num3 => GetNextNumber();
 
-    [DuckType("T")]
-    public static T Add<T>(T a, T b)
-    {
-        T sum = a + b;
-        return sum;
-    }
+    [DuckType("T"), CompileTime] public static T Add<T>(T a, T b) => a + b;
 
     public static int TestDuckTypeAddInts => Add(1, 2);
     public static float TestDuckTypeAddFloats => Add(1.2f, 3.4f);

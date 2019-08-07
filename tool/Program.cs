@@ -19,7 +19,7 @@ public static class Extensions
     {
         return string.Join(separator, list);
     }
-    
+
     // https://stackoverflow.com/questions/27105909/get-fully-qualified-metadata-name-in-roslyn
     public static string GetFullMetadataName(this ISymbol s)
     {
@@ -167,9 +167,21 @@ class CompileTimeRewriter : CSharpSyntaxRewriter
                 node.ArgumentList);
             var value = CompileAndRun(returnType, fullInvocation.ToString());
             var valueStr = value.ToString();
-            return SyntaxFactory.ParseExpression(value is string ? $"\"{Regex.Escape(valueStr)}\"" : valueStr);
+            return SyntaxFactory.ParseExpression(ObjectToLiteral(value, valueStr));
         }
         return base.VisitInvocationExpression(node);
+    }
+
+    static string ObjectToLiteral(object value, string valueStr)
+    {
+        switch (value)
+        {
+            case string str:
+                return $"\"{Regex.Escape(valueStr)}\"";
+            case float f:
+                return $"{valueStr}f";
+        }
+        return valueStr;
     }
 
     public override SyntaxNode Visit(SyntaxNode node)
@@ -209,6 +221,27 @@ class Program
 
         var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, optimizationLevel: OptimizationLevel.Release);
         var syntaxTree = SyntaxFactory.ParseSyntaxTree(source);
+        var compilation = CompileTree(references, options, syntaxTree);
+        var semanticModel = compilation.GetSemanticModel(syntaxTree);
+        syntaxTree = ExecuteDuckTypes(syntaxTree, semanticModel);
+
+        compilation = CompileTree(references, options, syntaxTree);
+        semanticModel = compilation.GetSemanticModel(syntaxTree);
+        var assembly = Assembly.LoadFrom("AsmBuild.dll");
+        syntaxTree = RunRewriter(syntaxTree, new CompileTimeRewriter(semanticModel, assembly));
+
+        Console.WriteLine(syntaxTree);
+
+        // var generatedClassTree = substituter.GetGeneratedClass();
+
+        // compilation = compilation.RemoveAllSyntaxTrees();
+        // compilation = compilation.AddSyntaxTrees(newTree, generatedClassTree);
+
+        // Console.WriteLine(generatedClassTree.ToString());
+    }
+
+    static CSharpCompilation CompileTree(MetadataReference[] references, CSharpCompilationOptions options, SyntaxTree syntaxTree)
+    {
         var compilation = CSharpCompilation.Create(
             "AsmBuild",
             new[] { syntaxTree },
@@ -220,22 +253,9 @@ class Program
         {
             foreach (var diag in result.Diagnostics)
                 Console.WriteLine(diag);
-            // throw new System.Exception("Fail!");
         }
 
-        var semanticModel = compilation.GetSemanticModel(syntaxTree);
-
-        // var assembly = Assembly.LoadFrom("AsmBuild.dll");
-        syntaxTree = ExecuteDuckTypes(syntaxTree, semanticModel);
-        // syntaxTree = RunRewriter(syntaxTree, new CompileTimeRewriter(semanticModel, assembly));
-        Console.WriteLine(syntaxTree);
-
-        // var generatedClassTree = substituter.GetGeneratedClass();
-
-        // compilation = compilation.RemoveAllSyntaxTrees();
-        // compilation = compilation.AddSyntaxTrees(newTree, generatedClassTree);
-
-        // Console.WriteLine(generatedClassTree.ToString());
+        return compilation;
     }
 
     static SyntaxTree ExecuteDuckTypes(SyntaxTree syntaxTree, SemanticModel semanticModel)
