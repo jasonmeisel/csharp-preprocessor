@@ -11,6 +11,8 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
+using static Microsoft.CodeAnalysis.CSharp.SyntaxFactory;
+
 public static class Extensions
 {
     public static string ListToString<T>(this IEnumerable<T> list, string separator = ", ")
@@ -55,18 +57,82 @@ public static class Extensions
         return symbol is INamespaceSymbol s && s.IsGlobalNamespace;
     }
 
-    public static bool HasCompileTimeAttribute(this ISymbol symbol)
+    public static AttributeData GetAttribute(this ISymbol symbol, string attributeTypeName)
     {
-        return symbol.GetAttributes().Any(attr => attr.AttributeClass.Name == "CompileTimeAttribute");
+        return symbol.GetAttributes().FirstOrDefault(attr => attr.AttributeClass.Name == attributeTypeName);
+    }
+
+    public static IMethodSymbol GetMethodSemantics(this SemanticModel semanticModel, InvocationExpressionSyntax invocation)
+    {
+        switch (invocation.Expression)
+        {
+            case MemberAccessExpressionSyntax memberAccess:
+                return (IMethodSymbol)semanticModel.GetSymbolInfo(memberAccess.Name).Symbol;
+            default:
+                var symbolInfo = semanticModel.GetSymbolInfo(invocation.Expression);
+                return symbolInfo.Symbol as IMethodSymbol;
+        }
     }
 }
 
-class Rewriter : CSharpSyntaxRewriter
+class DuckTypeRewriter : CSharpSyntaxRewriter
+{
+    SemanticModel m_semanticModel;
+
+    public Dictionary<string, List<MethodDeclarationSyntax>> NewMethods { get; } =
+        new Dictionary<string, List<MethodDeclarationSyntax>>();
+
+    public DuckTypeRewriter(SemanticModel semanticModel)
+    {
+        m_semanticModel = semanticModel;
+    }
+
+    public override SyntaxNode VisitInvocationExpression(InvocationExpressionSyntax node)
+    {
+        var methodSymbol = m_semanticModel.GetMethodSemantics(node);
+        var attribute = methodSymbol.GetAttribute("DuckTypeAttribute");
+        if (attribute != null)
+        {
+            var methodReference = methodSymbol.DeclaringSyntaxReferences.First();
+            if (methodReference.GetSyntax() is MethodDeclarationSyntax methodNode)
+            {
+                var newMethodName = $"GENERATED_{methodSymbol.Name}_{methodSymbol.TypeArguments.ListToString("_")}";
+
+                var duckTypes = attribute.ConstructorArguments.First().Values.Select(constant => constant.Value).Cast<string>().Distinct();
+                var newTypeParams = methodNode.TypeParameterList.Parameters.Where(p => !duckTypes.Contains(p.Identifier.ToString()));
+
+                var newAttrLists = methodNode.AttributeLists.
+                    Select(list => AttributeList(SeparatedList(list.Attributes.Where(attr =>
+                        attr.Name.ToString() != "DuckTypeAttribute" && attr.Name.ToString() != "DuckType")))).
+                    Where(list => list.Attributes.Any());
+
+                var newMethodNode = methodNode.WithIdentifier(ParseToken(newMethodName)).
+                    WithTypeParameterList(newTypeParams.Any() ? TypeParameterList(SeparatedList(newTypeParams)) : null).
+                    WithAttributeLists(List(newAttrLists));
+
+                var duckToInfer = methodSymbol.TypeParameters.Zip(methodSymbol.TypeArguments).
+                    ToDictionary(kv => kv.First.ToString(), kv => kv.Second.ToString());
+                newMethodNode = newMethodNode.ReplaceNodes(
+                    newMethodNode.DescendantNodes().OfType<TypeSyntax>(),
+                    (_, n) => duckToInfer.TryGetValue(n.ToString(), out var infer) ? ParseTypeName(infer).WithTriviaFrom(n) : n);
+
+                var methodNodeStr = methodNode.ToString();
+                NewMethods.TryAdd(methodNodeStr, new List<MethodDeclarationSyntax>());
+                NewMethods[methodNodeStr].Add(newMethodNode);
+
+                return node.WithExpression(ParseExpression(newMethodName));
+            }
+        }
+        return base.VisitInvocationExpression(node);
+    }
+}
+
+class CompileTimeRewriter : CSharpSyntaxRewriter
 {
     SemanticModel m_semanticModel;
     Assembly m_assembly;
 
-    public Rewriter(SemanticModel semanticModel, Assembly asm)
+    public CompileTimeRewriter(SemanticModel semanticModel, Assembly asm)
     {
         m_semanticModel = semanticModel;
         m_assembly = asm;
@@ -90,22 +156,10 @@ class Rewriter : CSharpSyntaxRewriter
         return value;
     }
 
-    IMethodSymbol GetMethodSemantics(InvocationExpressionSyntax invocation)
-    {
-        switch (invocation.Expression)
-        {
-            case MemberAccessExpressionSyntax memberAccess:
-                return (IMethodSymbol)m_semanticModel.GetSymbolInfo(memberAccess.Name).Symbol;
-            default:
-                var symbolInfo = m_semanticModel.GetSymbolInfo(invocation.Expression);
-                return symbolInfo.Symbol as IMethodSymbol;
-        }
-    }
-
     public override SyntaxNode VisitInvocationExpression(InvocationExpressionSyntax node)
     {
-        var symbol = GetMethodSemantics(node);
-        if (symbol.HasCompileTimeAttribute())
+        var symbol = m_semanticModel.GetMethodSemantics(node);
+        if (symbol.GetAttribute("CompileTimeAttribute") != null)
         {
             var returnType = symbol.ReturnType.ToString();
             var fullInvocation = SyntaxFactory.InvocationExpression(
@@ -122,22 +176,12 @@ class Rewriter : CSharpSyntaxRewriter
     {
         switch (node)
         {
-            case MemberDeclarationSyntax member when m_semanticModel.GetDeclaredSymbol(member)?.HasCompileTimeAttribute() == true:
-            case FieldDeclarationSyntax field when field.Declaration.Variables.Any(v => m_semanticModel.GetDeclaredSymbol(v)?.HasCompileTimeAttribute() == true):
+            case MemberDeclarationSyntax member when m_semanticModel.GetDeclaredSymbol(member)?.GetAttribute("CompileTimeAttribute") != null:
+            case FieldDeclarationSyntax field when field.Declaration.Variables.Any(v => m_semanticModel.GetDeclaredSymbol(v)?.GetAttribute("CompileTimeAttribute") != null):
                 return null;
         }
         return base.Visit(node);
     }
-
-    // public override SyntaxNode VisitMethodDeclaration(MethodDeclarationSyntax node)
-    // {
-    //     var symbol = m_semanticModel.GetDeclaredSymbol(node);
-    //     if (symbol.HasCompileTimeAttribute())
-    //     {
-    //         return null;
-    //     }
-    //     return base.VisitMethodDeclaration(node);
-    // }
 }
 
 class Program
@@ -176,22 +220,44 @@ class Program
         {
             foreach (var diag in result.Diagnostics)
                 Console.WriteLine(diag);
-            throw new System.Exception("Fail!");
+            // throw new System.Exception("Fail!");
         }
-
-        var asm = Assembly.LoadFrom("AsmBuild.dll");
 
         var semanticModel = compilation.GetSemanticModel(syntaxTree);
 
-        var substituter = new Rewriter(semanticModel, asm);
-        var newRoot = substituter.Visit(syntaxTree.GetRoot());
-        var newTree = SyntaxFactory.SyntaxTree(newRoot);
-        Console.WriteLine(newTree);
+        // var assembly = Assembly.LoadFrom("AsmBuild.dll");
+        syntaxTree = ExecuteDuckTypes(syntaxTree, semanticModel);
+        // syntaxTree = RunRewriter(syntaxTree, new CompileTimeRewriter(semanticModel, assembly));
+        Console.WriteLine(syntaxTree);
+
         // var generatedClassTree = substituter.GetGeneratedClass();
 
         // compilation = compilation.RemoveAllSyntaxTrees();
         // compilation = compilation.AddSyntaxTrees(newTree, generatedClassTree);
 
         // Console.WriteLine(generatedClassTree.ToString());
+    }
+
+    static SyntaxTree ExecuteDuckTypes(SyntaxTree syntaxTree, SemanticModel semanticModel)
+    {
+        var rewriter = new DuckTypeRewriter(semanticModel);
+        syntaxTree = RunRewriter(syntaxTree, rewriter);
+
+        var root = syntaxTree.GetRoot();
+        var allMethodDecls = syntaxTree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>();
+        foreach (var method in allMethodDecls)
+        {
+            if (rewriter.NewMethods.TryGetValue(method.ToString(), out var newMethods))
+            {
+                root = root.ReplaceNode(method, newMethods);
+            }
+        }
+        return syntaxTree.WithRootAndOptions(root, syntaxTree.Options);
+    }
+
+    static SyntaxTree RunRewriter(SyntaxTree syntaxTree, CSharpSyntaxRewriter rewriter)
+    {
+        var newRoot = rewriter.Visit(syntaxTree.GetRoot());
+        return SyntaxFactory.SyntaxTree(newRoot);
     }
 }
