@@ -200,16 +200,17 @@ class Program
 {
     static void Main(string[] args)
     {
-        var thread = new Thread(Run);
-        thread.Start();
-        thread.Join();
+        // var thread = new Thread(Run);
+        // thread.Start();
+        // thread.Join();
+        Run();
     }
 
     public static MetadataReference[] MetadataReferences { get; private set; }
 
-    static async void Run()
+    static void Run()
     {
-        var source = await File.ReadAllTextAsync("test/Test.cs");
+        var source = File.ReadAllText("test/Test.cs");
 
         var references = MetadataReferences = AppDomain.CurrentDomain.GetAssemblies().
             Select(ass => MetadataReference.CreateFromFile(ass.Location)).
