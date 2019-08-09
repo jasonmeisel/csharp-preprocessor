@@ -42,7 +42,9 @@ public static class Test
     public class Adder<T>
     {
         public T Total { get; private set; } = new T();
-        public void Add(T value) => Total += value;
+
+        [DuckType("T2")]
+        public void Add<T2>(T2 value) => Total += value;
     }
 
     public static float TestDuckTypeStruct()
