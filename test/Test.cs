@@ -37,4 +37,19 @@ public static class Test
 
     public static int TestDuckTypeAddInts => Add(1, 2);
     public static float TestDuckTypeAddFloats => Add(1.2f, 3.4f);
+
+    [DuckType("T")]
+    public class Adder<T>
+    {
+        public T Total { get; private set; } = new T();
+        public void Add(T value) => Total += value;
+    }
+
+    public static float TestDuckTypeStruct()
+    {
+        var adder = new Adder<float>();
+        adder.Add(3);
+        adder.Add(1.5f);
+        return adder.Total;
+    }
 }
