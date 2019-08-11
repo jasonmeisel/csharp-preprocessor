@@ -82,11 +82,10 @@ public static class Utilities
         yield return node;
     }
 
-    public static string GenerateNewCode(AttributeData attribute, string name, System.Collections.Immutable.ImmutableArray<ITypeParameterSymbol> typeParameters, System.Collections.Immutable.ImmutableArray<ITypeSymbol> typeArguments, TypeParameterListSyntax typeParameterList, SyntaxList<AttributeListSyntax> attributeLists, Func<CSharpSyntaxNode, string, IEnumerable<TypeParameterSyntax>, IEnumerable<AttributeListSyntax>, CSharpSyntaxNode> withDeclarationInfo, CSharpSyntaxNode ogNode, Dictionary<string, List<CSharpSyntaxNode>> newNodes)
+    public static string GenerateNewCode(string[] duckTypes, string name, System.Collections.Immutable.ImmutableArray<ITypeParameterSymbol> typeParameters, System.Collections.Immutable.ImmutableArray<ITypeSymbol> typeArguments, TypeParameterListSyntax typeParameterList, SyntaxList<AttributeListSyntax> attributeLists, Func<CSharpSyntaxNode, string, IEnumerable<TypeParameterSyntax>, IEnumerable<AttributeListSyntax>, CSharpSyntaxNode> withDeclarationInfo, CSharpSyntaxNode ogNode, Dictionary<string, List<CSharpSyntaxNode>> newNodes)
     {
         var newName = $"GENERATED_{name}_{typeArguments.ListToString("_")}";
 
-        var duckTypes = attribute.ConstructorArguments.First().Values.Select(constant => constant.Value).Cast<string>().Distinct();
         var newTypeParams = typeParameterList.Parameters.Where(p => !duckTypes.Contains(p.Identifier.ToString()));
 
         var newAttrLists = attributeLists.
@@ -131,13 +130,13 @@ class DuckTypeMethodRewriter : DuckTypeRewriter
     public override SyntaxNode VisitInvocationExpression(InvocationExpressionSyntax node)
     {
         var methodSymbol = m_semanticModel.GetMethodSemantics(node);
-        var attribute = methodSymbol.GetAttribute("DuckTypeAttribute");
-        if (attribute != null)
+        var duckTypes = methodSymbol.TypeParameters.Where(t => t.GetAttribute("DuckTypeAttribute") != null).Select(t => t.Name).ToArray();
+        if (duckTypes.Any())
         {
             var methodReference = methodSymbol.DeclaringSyntaxReferences.First();
             if (methodReference.GetSyntax() is MethodDeclarationSyntax methodNode)
             {
-                var newName = Utilities.GenerateNewCode(attribute, methodSymbol.Name, methodSymbol.TypeParameters, methodSymbol.TypeArguments, methodNode.TypeParameterList, methodNode.AttributeLists, WithMethodDeclarationInfo, methodNode, NewNodes);
+                var newName = Utilities.GenerateNewCode(duckTypes, methodSymbol.Name, methodSymbol.TypeParameters, methodSymbol.TypeArguments, methodNode.TypeParameterList, methodNode.AttributeLists, WithMethodDeclarationInfo, methodNode, NewNodes);
                 var newExpression = ParseExpression(newName);
                 if (node.Expression is MemberAccessExpressionSyntax memberAccess)
                 {
@@ -175,13 +174,13 @@ class DuckTypeTypeRewriter : DuckTypeRewriter
         var typeSymbol = m_semanticModel.GetSymbolInfo(node.Type);
         if (typeSymbol.Symbol is INamedTypeSymbol namedTypeSymbol)
         {
-            var attribute = namedTypeSymbol.GetAttribute("DuckTypeAttribute");
-            if (attribute != null)
+            var typeDeclaration = typeSymbol.Symbol.DeclaringSyntaxReferences.FirstOrDefault();
+            if (typeDeclaration?.GetSyntax() is TypeDeclarationSyntax typeDeclarationNode)
             {
-                var typeDeclaration = typeSymbol.Symbol.DeclaringSyntaxReferences.First();
-                if (typeDeclaration.GetSyntax() is TypeDeclarationSyntax typeDeclarationNode)
+                var duckTypes = typeDeclarationNode.TypeParameterList.Parameters.Select(p => p.Identifier.ToString()).ToArray();
+                if (duckTypes.Any())
                 {
-                    var newName = Utilities.GenerateNewCode(attribute, namedTypeSymbol.Name, namedTypeSymbol.TypeParameters, namedTypeSymbol.TypeArguments, typeDeclarationNode.TypeParameterList, typeDeclarationNode.AttributeLists, WithTypeDeclarationInfo, typeDeclarationNode, NewNodes);
+                    var newName = Utilities.GenerateNewCode(duckTypes, namedTypeSymbol.Name, namedTypeSymbol.TypeParameters, namedTypeSymbol.TypeArguments, typeDeclarationNode.TypeParameterList, typeDeclarationNode.AttributeLists, WithTypeDeclarationInfo, typeDeclarationNode, NewNodes);
                     return node.WithType(ParseTypeName(newName));
                 }
             }
@@ -289,12 +288,10 @@ class Program
         var compilation = CompileTree(references, options, syntaxTree);
         var semanticModel = compilation.GetSemanticModel(syntaxTree);
         syntaxTree = ExecuteDuckTypes(syntaxTree, new DuckTypeMethodRewriter(semanticModel));
-        
+
         compilation = CompileTree(references, options, syntaxTree);
         semanticModel = compilation.GetSemanticModel(syntaxTree);
         syntaxTree = ExecuteDuckTypes(syntaxTree, new DuckTypeTypeRewriter(semanticModel));
-        
-        Console.WriteLine(syntaxTree);
 
         compilation = CompileTree(references, options, syntaxTree);
         semanticModel = compilation.GetSemanticModel(syntaxTree);
@@ -302,13 +299,6 @@ class Program
         syntaxTree = RunRewriter(syntaxTree, new CompileTimeRewriter(semanticModel, assembly));
 
         Console.WriteLine(syntaxTree);
-
-        // var generatedClassTree = substituter.GetGeneratedClass();
-
-        // compilation = compilation.RemoveAllSyntaxTrees();
-        // compilation = compilation.AddSyntaxTrees(newTree, generatedClassTree);
-
-        // Console.WriteLine(generatedClassTree.ToString());
     }
 
     static CSharpCompilation CompileTree(MetadataReference[] references, CSharpCompilationOptions options, SyntaxTree syntaxTree)

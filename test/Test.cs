@@ -33,18 +33,16 @@ public static class Test
     public static int Num2 => GetNextNumber();
     public static int Num3 => GetNextNumber();
 
-    [DuckType("T"), CompileTime] public static T Add<T>(T a, T b) => a + b;
+    [CompileTime] public static T Add<[DuckType] T>(T a, T b) => a + b;
 
     public static int TestDuckTypeAddInts => Add(1, 2);
     public static float TestDuckTypeAddFloats => Add(1.2f, 3.4f);
 
-    [DuckType("T")]
-    public class Adder<T>
+    public class Adder<[DuckType] T>
     {
         public T Total { get; private set; } = new T();
 
-        [DuckType("T2")]
-        public void Add<T2>(T2 value) => Total += value;
+        public void Add<[DuckType] T2>(T2 value) => Total += value;
     }
 
     public static float TestDuckTypeStruct()
