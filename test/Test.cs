@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 
 public static class Test
 {
@@ -52,4 +53,9 @@ public static class Test
         adder.Add(1.5f);
         return adder.Total;
     }
+
+    [CompileTime] public static int Fib(int n, int a = 0, int b = 1) => n == 0 ? a : Fib(n - 1, b, a + b);
+    [CompileTime] public static int[] AllFibImpl(int n) => Enumerable.Range(0, n).Select(i => Fib(i)).ToArray();
+
+    public static readonly int[] AllFib = AllFibImpl(20);
 }

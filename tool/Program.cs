@@ -229,21 +229,23 @@ class CompileTimeRewriter : CSharpSyntaxRewriter
                 node.ArgumentList);
             var value = CompileAndRun(returnType, fullInvocation.ToString());
             var valueStr = value.ToString();
-            return SyntaxFactory.ParseExpression(ObjectToLiteral(value, valueStr));
+            return SyntaxFactory.ParseExpression(ObjectToLiteral(value));
         }
         return base.VisitInvocationExpression(node);
     }
 
-    static string ObjectToLiteral(object value, string valueStr)
+    static string ObjectToLiteral(object value)
     {
         switch (value)
         {
             case string str:
-                return $"\"{Regex.Escape(valueStr)}\"";
+                return $"\"{Regex.Escape(str)}\"";
             case float f:
-                return $"{valueStr}f";
+                return $"{f}f";
+            case Array a:
+                return $"new {a.GetType().GetElementType().FullName}[] {{ {a.Cast<object>().Select(o => ObjectToLiteral(o)).ListToString()} }}";
         }
-        return valueStr;
+        return value.ToString();
     }
 
     public override SyntaxNode Visit(SyntaxNode node)
