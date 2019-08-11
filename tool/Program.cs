@@ -239,13 +239,18 @@ class CompileTimeRewriter : CSharpSyntaxRewriter
         switch (value)
         {
             case string str:
-                return $"\"{Regex.Escape(str)}\"";
+                return $"\"{Escape(str)}\"";
             case float f:
                 return $"{f}f";
             case Array a:
                 return $"new {a.GetType().GetElementType().FullName}[] {{ {a.Cast<object>().Select(o => ObjectToLiteral(o)).ListToString()} }}";
         }
         return value.ToString();
+    }
+
+    static string Escape(string str)
+    {
+        return str.Replace(@"\", @"\\").Replace("\n", @"\n").Replace("\r", @"\r");
     }
 
     public override SyntaxNode Visit(SyntaxNode node)
